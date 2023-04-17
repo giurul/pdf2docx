@@ -188,7 +188,7 @@ class Converter:
         return self
 
 
-    def make_docx(self, docx_filename=None, **kwargs):
+    def make_docx(self, **kwargs):
         '''Step 4 of converting process: create docx file with converted pages.
         
         Args:
@@ -204,11 +204,29 @@ class Converter:
         if not parsed_pages:
             raise ConversionException('No parsed pages. Please parse page first.')
 
+        # create page by page        
+        self.docx_file = Document() 
+        num_pages = len(parsed_pages)
+        for i, page in enumerate(parsed_pages, start=1):
+            if not page.finalized: continue # ignore unparsed pages
+            pid = page.id + 1
+            logging.info('(%d/%d) Page %d', i, num_pages, pid)
+            try:
+                page.make_docx(self.docx_file)
+            except Exception as e:
+                if not kwargs['debug'] and kwargs['ignore_page_error']:
+                    logging.error('Ignore page %d due to making page error: %s', pid, e)
+                else:
+                    raise MakedocxException(f'Error when make page {pid}: {e}')
+        return self.docx_file
+
+
+    def save_docx(self, docx_filename=None) -> None:
         if not docx_filename:
             raise ConversionException(
                 "No docx file name. Please specify a docx file name or a file-like object to write."
             )
-
+        
         # docx file to convert to
         if hasattr(docx_filename, "write"):
             filename = docx_filename
@@ -217,23 +235,7 @@ class Converter:
             filename = docx_filename or f'{self.filename_pdf[0:-len(".pdf")]}.docx' if self.filename_pdf else "output.docx"
             if os.path.exists(filename): os.remove(filename)
 
-        # create page by page        
-        docx_file = Document() 
-        num_pages = len(parsed_pages)
-        for i, page in enumerate(parsed_pages, start=1):
-            if not page.finalized: continue # ignore unparsed pages
-            pid = page.id + 1
-            logging.info('(%d/%d) Page %d', i, num_pages, pid)
-            try:
-                page.make_docx(docx_file)
-            except Exception as e:
-                if not kwargs['debug'] and kwargs['ignore_page_error']:
-                    logging.error('Ignore page %d due to making page error: %s', pid, e)
-                else:
-                    raise MakedocxException(f'Error when make page {pid}: {e}')
-
-        # save docx
-        docx_file.save(filename)
+        self.docx_file.save(filename)
 
 
     # -----------------------------------------------------------------------
@@ -307,8 +309,10 @@ class Converter:
         self.serialize(layout_file)
 
     def convert(self, docx_filename: Union[str, IO[AnyStr]] = None, start: int = 0, end: int = None, pages: list = None,
-                **kwargs):
+                **kwargs) -> Document:
         """Convert specified PDF pages to docx file.
+
+        Returns: docx.document.Document 
 
         Args:
             docx_filename (str, file-like, optional): docx file to write. Defaults to None.
@@ -349,10 +353,11 @@ class Converter:
         if settings['multi_processing']:
             self._convert_with_multi_processing(docx_filename, start, end, **settings)
         else:
-            self.parse(start, end, pages, **settings).make_docx(docx_filename, **settings)
+            self.parse(start, end, pages, **settings).make_docx(**settings)
 
-        logging.info('Terminated in %.2fs.', perf_counter()-t0)        
+        logging.info('Terminated in %.2fs.', perf_counter()-t0)
 
+        return self.docx_file
 
     def extract_tables(self, start:int=0, end:int=None, pages:list=None, **kwargs):
         '''Extract table contents from specified PDF pages.
@@ -404,7 +409,8 @@ class Converter:
             os.remove(filename)
         
         # create docx file
-        self.make_docx(docx_filename, **kwargs)
+        docx = self.make_docx(docx_filename, **kwargs)
+        self.save_docx(docx)
 
 
     @staticmethod
